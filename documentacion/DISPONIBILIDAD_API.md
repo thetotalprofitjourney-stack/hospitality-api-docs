@@ -207,25 +207,144 @@ def transformar_disponibilidad(response, hotel_id):
 
 ## Lógica de Carga
 
-### Carga Inicial
+### Carga Inicial (Históricos - una vez)
+
+Cargar datos desde **2 años atrás hasta ayer**:
+
 ```
-1. Para cada hotel en tu lista:
-   2. Dividir el rango de fechas en chunks de 62 días (límite de la API)
-   3. Para cada chunk:
-      - Llamar a getInventoryStatistics
-      - Transformar respuesta
-      - INSERT en tabla disponibilidad
+fecha_inicio = HOY - 2 años
+fecha_fin = HOY - 1 día (ayer)
+
+Para cada hotel:
+  Mientras fecha_inicio <= fecha_fin:
+    bloque_fin = MIN(fecha_inicio + 61 días, fecha_fin)
+
+    1. GET /inv/v1/hotels/{hotelId}/inventoryStatistics
+       ?dateRangeStart={fecha_inicio}&dateRangeEnd={bloque_fin}
+       &reportCode=RoomsAvailabilitySummary
+       &parameterName=RoomPhysicalRoomsYN&parameterValue=Y
+       &parameterName=RoomOOOYN&parameterValue=Y
+       &parameterName=RoomOOSRoomsYN&parameterValue=Y
+       &parameterName=RoomAvailRoomsYN&parameterValue=Y
+
+    2. Transformar respuesta
+    3. INSERT en tabla disponibilidad
+
+    fecha_inicio = bloque_fin + 1 día
 ```
 
-### Proceso Incremental Diario
+**Ejemplo para 2 años (730 días):**
+- Necesitas ~12 llamadas por hotel (730 / 62 = 11.8)
+
+---
+
+### Proceso Diario
+
+Ejecutar cada día: desde **3 días atrás hasta 31 de diciembre del año siguiente**:
+
 ```
-1. Calcular fecha_ayer = HOY - 1 día
-2. Para cada hotel:
-   3. Llamar a getInventoryStatistics con dateRangeStart=fecha_ayer y dateRangeEnd=fecha_ayer
-   4. Transformar respuesta
-   5. Para cada registro:
-      - Si existe id_unico → UPDATE
-      - Si no existe → INSERT
+fecha_inicio = HOY - 3 días
+fecha_fin = 31 de diciembre del año siguiente
+
+Para cada hotel:
+  Mientras fecha_inicio <= fecha_fin:
+    bloque_fin = MIN(fecha_inicio + 61 días, fecha_fin)
+
+    1. GET /inv/v1/hotels/{hotelId}/inventoryStatistics
+       ?dateRangeStart={fecha_inicio}&dateRangeEnd={bloque_fin}
+       ...
+
+    2. Transformar respuesta
+
+    3. Para cada registro:
+       - Buscar en BD por id_unico (idHotel-fecha-tipo_hab)
+       - Si existe → UPDATE
+       - Si no existe → INSERT
+
+    fecha_inicio = bloque_fin + 1 día
+```
+
+**Ejemplo (ejecutado el 31 de enero de 2026):**
+- fecha_inicio = 28 enero 2026 (HOY - 3)
+- fecha_fin = 31 diciembre 2027
+- Rango total = ~700 días
+- Llamadas necesarias = ~12 por hotel
+
+---
+
+### Ejemplo de Llamadas Diarias
+
+```bash
+# Bloque 1: 28 enero 2026 → 30 marzo 2026 (62 días)
+GET /inv/v1/hotels/4821/inventoryStatistics?dateRangeStart=2026-01-28&dateRangeEnd=2026-03-30&...
+
+# Bloque 2: 31 marzo 2026 → 31 mayo 2026
+GET /inv/v1/hotels/4821/inventoryStatistics?dateRangeStart=2026-03-31&dateRangeEnd=2026-05-31&...
+
+# ... continuar hasta 31 diciembre 2027
+```
+
+---
+
+### Lógica de Upsert
+
+```python
+def upsert_disponibilidad(registros, connection):
+    """
+    Inserta o actualiza registros de disponibilidad.
+    Clave única: idHotel + fecha + tipo_hab
+    """
+    for registro in registros:
+        id_unico = registro['id_unico']
+
+        # Buscar si existe
+        existing = db.query(
+            "SELECT id FROM disponibilidad WHERE id_unico = ?",
+            id_unico
+        )
+
+        if existing:
+            # UPDATE
+            db.execute("""
+                UPDATE disponibilidad
+                SET total = ?, ooo = ?, oos = ?, libres = ?,
+                    fecha_actualizacion = CURRENT_TIMESTAMP
+                WHERE id_unico = ?
+            """, (
+                registro['total'],
+                registro['ooo'],
+                registro['oos'],
+                registro['libres'],
+                id_unico
+            ))
+        else:
+            # INSERT
+            db.execute("""
+                INSERT INTO disponibilidad
+                (id_unico, idHotel, fecha, tipo_hab, total, ooo, oos, libres)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                id_unico,
+                registro['idHotel'],
+                registro['fecha'],
+                registro['tipo_hab'],
+                registro['total'],
+                registro['ooo'],
+                registro['oos'],
+                registro['libres']
+            ))
+
+# Alternativa SQL con ON CONFLICT (PostgreSQL)
+"""
+INSERT INTO disponibilidad (id_unico, idHotel, fecha, tipo_hab, total, ooo, oos, libres)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (id_unico) DO UPDATE SET
+    total = EXCLUDED.total,
+    ooo = EXCLUDED.ooo,
+    oos = EXCLUDED.oos,
+    libres = EXCLUDED.libres,
+    fecha_actualizacion = CURRENT_TIMESTAMP;
+"""
 ```
 
 ---
