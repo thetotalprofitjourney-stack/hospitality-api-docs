@@ -1,0 +1,59 @@
+# Opera Cloud API - Configuración
+# Copiar este archivo a .env y rellenar con tus credenciales
+
+# ============================================
+# REGIÓN ÚNICA (si solo tienes una región)
+# ============================================
+OPERA_HOST=https://tu-tenant.hospitality-api.eu-frankfurt-1.ocs.oraclecloud.com
+OPERA_CLIENT_ID=tu_client_id
+OPERA_CLIENT_SECRET=tu_client_secret
+OPERA_APP_KEY=tu_app_key
+OPERA_USERNAME=tu_usuario_integracion
+OPERA_PASSWORD=tu_password
+
+# ============================================
+# MULTI-REGIÓN (si tienes hoteles en varias regiones)
+# Descomentar y configurar las regiones que apliquen
+# ============================================
+
+# Lista de regiones activas (separadas por coma)
+# OPERA_REGIONES=eu-frankfurt-1,us-ashburn-1,ap-tokyo-1
+
+# --- Europa (Frankfurt) ---
+# OPERA_EU_FRANKFURT_1_HOST=https://tu-tenant.hospitality-api.eu-frankfurt-1.ocs.oraclecloud.com
+# OPERA_EU_FRANKFURT_1_CLIENT_ID=
+# OPERA_EU_FRANKFURT_1_CLIENT_SECRET=
+# OPERA_EU_FRANKFURT_1_APP_KEY=
+# OPERA_EU_FRANKFURT_1_USERNAME=
+# OPERA_EU_FRANKFURT_1_PASSWORD=
+
+# --- US East (Ashburn) ---
+# OPERA_US_ASHBURN_1_HOST=https://tu-tenant.hospitality-api.us-ashburn-1.ocs.oraclecloud.com
+# OPERA_US_ASHBURN_1_CLIENT_ID=
+# OPERA_US_ASHBURN_1_CLIENT_SECRET=
+# OPERA_US_ASHBURN_1_APP_KEY=
+# OPERA_US_ASHBURN_1_USERNAME=
+# OPERA_US_ASHBURN_1_PASSWORD=
+
+# --- APAC (Tokyo) ---
+# OPERA_AP_TOKYO_1_HOST=https://tu-tenant.hospitality-api.ap-tokyo-1.ocs.oraclecloud.com
+# OPERA_AP_TOKYO_1_CLIENT_ID=
+# OPERA_AP_TOKYO_1_CLIENT_SECRET=
+# OPERA_AP_TOKYO_1_APP_KEY=
+# OPERA_AP_TOKYO_1_USERNAME=
+# OPERA_AP_TOKYO_1_PASSWORD=
+
+# ============================================
+# BASE DE DATOS
+# ============================================
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=opera_data
+DB_USER=postgres
+DB_PASSWORD=tu_password_db
+
+# ============================================
+# OPCIONES DE EJECUCIÓN
+# ============================================
+# LOG_LEVEL=INFO
+# PARALLEL_HOTELS=3
