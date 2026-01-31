@@ -356,7 +356,19 @@ def procesar_grupos(hotel_id, fecha_inicio, fecha_fin):
 3. La fecha_actualizacion permite detectar registros obsoletos
 ```
 
+### Limpieza de Grupos Pasados
+
+Después de cada proceso diario, eliminar grupos cuya fecha de fin ya pasó:
+
+```sql
+-- IMPORTANTE: Eliminar grupos con fecha_fin anterior a ayer
+-- Estos grupos ya no suman ni restan, mantener la BD limpia
+DELETE FROM grupos
+WHERE fecha_fin < CURRENT_DATE - INTERVAL '1 day';
+```
+
 ### Detección de Grupos Cancelados o Completados
+
 ```sql
 -- Grupos que ya no tienen habitaciones pendientes
 -- (todas con rooming o cancelados)
@@ -366,7 +378,25 @@ WHERE idgrupo_codigo NOT IN (
     FROM api_response_blocks
     WHERE available > 0
 )
-AND fecha_actualizacion < DATE('yesterday');
+AND fecha_actualizacion < CURRENT_DATE - INTERVAL '1 day';
+```
+
+### Proceso Completo de Limpieza (ejecutar al final del proceso diario)
+
+```sql
+-- 1. Eliminar grupos pasados (fecha_fin < ayer)
+DELETE FROM grupos
+WHERE fecha_fin < CURRENT_DATE - INTERVAL '1 day';
+
+-- 2. Eliminar registros de días pasados dentro de grupos activos
+DELETE FROM grupos
+WHERE fecha_pernoctacion < CURRENT_DATE - INTERVAL '1 day';
+
+-- 3. Verificar consistencia
+SELECT COUNT(*) as registros_antiguos
+FROM grupos
+WHERE fecha_pernoctacion < CURRENT_DATE;
+-- Debería devolver 0
 ```
 
 ---

@@ -10,7 +10,44 @@ Obtener datos adicionales del huésped principal que no vienen en el Daily Summa
 
 ---
 
-## Flujo de Enriquecimiento
+## IMPORTANTE: Proceso Dependiente de RESERVAS
+
+Este proceso **NO es independiente**. Depende de las reservas ya almacenadas en tu base de datos.
+
+### Flujo Correcto
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  PROCESO 1: RESERVAS (ver RESERVAS_API.md)                          │
+│  - Se ejecuta primero (diariamente)                                 │
+│  - Guarda reservas en BD con fecha_nacimiento = NULL                │
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  PROCESO 2: PERFILES (este documento)                               │
+│  - Se ejecuta DESPUÉS (puede ser nocturno/batch)                    │
+│  - Solo para reservas WHERE fecha_nacimiento IS NULL                │
+│  - Actualiza reservas existentes con birthDate                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Consulta para Obtener Reservas a Enriquecer
+
+```sql
+-- Reservas que necesitan enriquecimiento de perfil
+SELECT DISTINCT idhotel, idreserva
+FROM reservas
+WHERE fecha_nacimiento IS NULL
+  AND profile_id IS NULL
+  AND estado NOT IN ('CANCELLED', 'NO SHOW')  -- Opcional: excluir canceladas
+ORDER BY fecha_reserva DESC
+LIMIT 1000;  -- Procesar en batches
+```
+
+---
+
+## Flujo de Enriquecimiento por Reserva
 
 El proceso requiere **2 llamadas adicionales** por reserva:
 
@@ -243,93 +280,141 @@ edad = calcular_edad("1985-03-15")  # → 40 (en 2026)
 
 ---
 
-## Estrategia de Enriquecimiento Recomendada
+## Proceso de Enriquecimiento (RECOMENDADO)
 
-### Opción A: Enriquecimiento en Tiempo Real (por reserva)
+### Flujo Completo
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  PASO 1: Proceso RESERVAS (diario)                                  │
+│  - Guarda reservas en BD                                            │
+│  - Campos fecha_nacimiento y profile_id quedan NULL                 │
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│  PASO 2: Proceso PERFILES (batch, puede ser nocturno)               │
+│                                                                     │
+│  1. SELECT DISTINCT idhotel, idreserva                              │
+│     FROM reservas                                                   │
+│     WHERE fecha_nacimiento IS NULL                                  │
+│     LIMIT 500  -- procesar en batches                               │
+│                                                                     │
+│  2. Para cada reserva sin fecha_nacimiento:                         │
+│     a. GET /rsv/.../reservations/{id} → obtener profileId           │
+│     b. GET /crm/v1/profiles/{profileId} → obtener birthDate         │
+│     c. UPDATE reservas SET                                          │
+│          fecha_nacimiento = birthDate,                              │
+│          profile_id = profileId                                     │
+│        WHERE idreserva = ?                                          │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Código del Proceso Batch
 
 ```python
-def enriquecer_reserva(hotel_id, reservation_id, token):
-    """Enriquece una reserva con datos del perfil del huésped"""
+def proceso_enriquecimiento_perfiles(db, api_client, batch_size=500):
+    """
+    Proceso batch para enriquecer reservas con datos de perfil.
+    Ejecutar después del proceso de RESERVAS (puede ser nocturno).
+    """
 
-    # 1. Obtener reserva con profileId
-    reserva = get_reservation(hotel_id, reservation_id, token)
-    profile_id = obtener_profile_id_principal(reserva)
+    # 1. Obtener reservas sin fecha_nacimiento
+    reservas_pendientes = db.query("""
+        SELECT DISTINCT idhotel, idreserva
+        FROM reservas
+        WHERE fecha_nacimiento IS NULL
+          AND estado NOT IN ('CANCELLED', 'NO SHOW')
+        ORDER BY fecha_reserva DESC
+        LIMIT ?
+    """, batch_size)
 
-    if not profile_id:
-        return None
+    print(f"Reservas a enriquecer: {len(reservas_pendientes)}")
 
-    # 2. Obtener perfil
-    perfil = get_profile(profile_id, token)
+    for reserva in reservas_pendientes:
+        hotel_id = reserva['idhotel']
+        reservation_id = reserva['idreserva']
 
-    # 3. Extraer datos
-    customer = perfil.get('profile', {}).get('customer', {})
+        try:
+            # 2a. Obtener profileId de la reserva
+            res_detail = api_client.get_reservation(hotel_id, reservation_id)
+            profile_id = obtener_profile_id_principal(res_detail)
 
-    return {
-        'fecha_nacimiento': customer.get('birthDate'),
-        'edad': calcular_edad(customer.get('birthDate')),
-        'genero': customer.get('gender'),
-        'pais_nacimiento': customer.get('birthCountry', {}).get('code'),
-        'vip_status': customer.get('vipStatus'),
-        'nombre': f"{customer.get('personName', [{}])[0].get('givenName', '')} {customer.get('personName', [{}])[0].get('surname', '')}"
-    }
+            if not profile_id:
+                # Marcar como procesado sin perfil
+                db.execute("""
+                    UPDATE reservas
+                    SET profile_id = 'NO_PROFILE'
+                    WHERE idhotel = ? AND idreserva = ?
+                """, (hotel_id, reservation_id))
+                continue
+
+            # 2b. Obtener datos del perfil
+            perfil = api_client.get_profile(profile_id)
+            customer = perfil.get('profile', {}).get('customer', {})
+            birth_date = customer.get('birthDate')
+
+            # 2c. Actualizar reservas
+            db.execute("""
+                UPDATE reservas
+                SET fecha_nacimiento = ?,
+                    profile_id = ?
+                WHERE idhotel = ? AND idreserva = ?
+            """, (birth_date, profile_id, hotel_id, reservation_id))
+
+        except Exception as e:
+            print(f"Error enriqueciendo {reservation_id}: {e}")
+            continue
+
+    db.commit()
 ```
 
-**Ventaja:** Datos siempre actualizados
-**Desventaja:** 2 llamadas adicionales por reserva (lento para volumen alto)
+### Ventajas de este Enfoque
 
-### Opción B: Proceso Batch Separado (Recomendada)
+| Ventaja | Descripción |
+|---------|-------------|
+| **No ralentiza RESERVAS** | El proceso principal no espera las 2 llamadas extra |
+| **Eficiente** | Solo procesa reservas que no tienen fecha_nacimiento |
+| **No repite trabajo** | Una vez enriquecida, no vuelve a procesarla |
+| **Escalable** | Puede ejecutarse en paralelo o en batches |
+| **Flexible** | Puede ejecutarse con menos frecuencia (nocturno) |
 
-```
-PROCESO PRINCIPAL (Daily Summary)
-│
-├── 1. Obtener reservas modificadas ayer
-├── 2. Guardar en BD con profileId = NULL
-└── 3. Marcar para enriquecimiento posterior
+---
 
-PROCESO DE ENRIQUECIMIENTO (separado, puede ser nocturno)
-│
-├── 1. SELECT reservas WHERE fecha_nacimiento IS NULL
-├── 2. Para cada reserva:
-│   ├── GET reserva → obtener profileId
-│   ├── GET perfil → obtener birthDate, etc.
-│   └── UPDATE reserva con datos del perfil
-└── 3. Puede ejecutarse en paralelo (múltiples threads)
-```
+## Alternativa: Caché de Perfiles
 
-**Ventaja:** No ralentiza el proceso principal
-**Desventaja:** Datos del perfil disponibles con delay
-
-### Opción C: Caché de Perfiles
+Si un mismo huésped tiene múltiples reservas, puedes cachear sus datos:
 
 ```python
-# Mantener una tabla de perfiles
-# profiles: profile_id, birth_date, gender, last_updated
-
-def obtener_datos_perfil_con_cache(profile_id, token):
-    """Primero busca en caché, si no existe o está desactualizado, llama a la API"""
+def obtener_datos_perfil_con_cache(profile_id, api_client, db):
+    """Primero busca en caché, si no existe llama a la API"""
 
     # Buscar en caché
-    cached = db.query("SELECT * FROM profiles WHERE profile_id = ?", profile_id)
+    cached = db.query(
+        "SELECT * FROM profiles_cache WHERE profile_id = ?",
+        profile_id
+    )
 
-    if cached and cached.last_updated > (today - 30 days):
+    if cached:
         return cached
 
-    # Si no está en caché o está desactualizado, llamar a API
-    perfil = get_profile(profile_id, token)
+    # Si no está en caché, llamar a API
+    perfil = api_client.get_profile(profile_id)
+    customer = perfil.get('profile', {}).get('customer', {})
 
     # Guardar en caché
-    db.upsert("profiles", {
-        'profile_id': profile_id,
-        'birth_date': perfil.get('birthDate'),
-        'gender': perfil.get('gender'),
-        # ...
-        'last_updated': today
-    })
+    db.execute("""
+        INSERT INTO profiles_cache (profile_id, birth_date, gender)
+        VALUES (?, ?, ?)
+        ON CONFLICT (profile_id) DO UPDATE SET
+            birth_date = EXCLUDED.birth_date,
+            gender = EXCLUDED.gender
+    """, (profile_id, customer.get('birthDate'), customer.get('gender')))
 
-    return perfil
+    return customer
 ```
 
-**Ventaja:** Reduce llamadas a la API (perfiles repetidos)
+**Ventaja:** Reduce llamadas a la API para huéspedes repetidos
 **Desventaja:** Requiere mantener tabla adicional
 
 ---

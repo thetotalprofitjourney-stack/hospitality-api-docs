@@ -194,6 +194,10 @@ GET /rsv/async/v1/externalSystems/{extSystemCode}/hotels/{hotelId}/reservations/
 | `importe_alojamiento` | netRateAmount | `reservations[].dailySummary[].netRateAmount` | **Sin impuestos** |
 | `moneda` | netRateAmountCurrency | `reservations[].dailySummary[].netRateAmountCurrency` | |
 | `fecha_actualizacion` | lastModifiedDateTime | `reservations[].lastModifiedDateTime` | |
+| `fecha_nacimiento` | birthDate | **Ver PERFILES_HUESPED_API.md** | Enriquecido posteriormente |
+| `profile_id` | profileId | **Ver PERFILES_HUESPED_API.md** | Para enriquecimiento |
+
+**Nota:** Los campos `fecha_nacimiento` y `profile_id` se rellenan mediante el proceso de enriquecimiento de perfiles (ver `PERFILES_HUESPED_API.md`). Inicialmente se guardan como `NULL` y se actualizan en un proceso posterior.
 
 ### Clave Única para Upsert
 ```
